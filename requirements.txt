@@ -3,4 +3,4 @@ pandas
 faiss-cpu
 transformers
 langchain_groq
-docx
+python-docx
