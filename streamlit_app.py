@@ -28,7 +28,7 @@ def read_docx(file_path):
 
 # Chunking function
 def chunk_text(text):
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=300, chunk_overlap=100)
     chunks = text_splitter.split_text(text)
     return chunks
 
@@ -84,22 +84,52 @@ def compare_documents(doc1_path, doc2_path, parameters):
 
     # Convert results to DataFrame
     df = pd.DataFrame(results)
-    output_file = "comparison_results.xlsx"
-    df.to_excel(output_file, index=False)
-    print(f"Comparison results saved to {output_file}")
+    return df
 
-# File paths for the documents
-doc1_path = "document1.docx"
-doc2_path = "document2.docx"
+# Streamlit UI
+st.title("Intelligent Document Comparer")
 
-# Parameters to compare
-parameters = [
-    "Purpose of the document",
-    "Key terms and definitions",
-    "Primary clauses",
-    "Signatories",
-    "Dates and timelines",
-]
+uploaded_file1 = st.file_uploader("Upload Document 1 (DOCX)", type=["docx"])
+uploaded_file2 = st.file_uploader("Upload Document 2 (DOCX)", type=["docx"])
 
-# Compare the documents
-compare_documents(doc1_path, doc2_path, parameters)
+if uploaded_file1 and uploaded_file2:
+    # Save the uploaded files temporarily
+    with open("temp_doc1.docx", "wb") as f:
+        f.write(uploaded_file1.getbuffer())
+    with open("temp_doc2.docx", "wb") as f:
+        f.write(uploaded_file2.getbuffer())
+    
+    doc1_path = "temp_doc1.docx"
+    doc2_path = "temp_doc2.docx"
+
+    # Allow user to input comparison parameters
+    st.subheader("Enter Parameters for Comparison")
+    default_parameters = ["Purpose of the document", "Key terms and definitions", "Primary clauses"]
+    parameter_input = st.text_area(
+        "Enter parameters separated by commas:",
+        value=", ".join(default_parameters)
+    )
+    parameters = [param.strip() for param in parameter_input.split(",") if param.strip()]
+
+    if st.button("Compare Documents"):
+        # Perform document comparison
+        with st.spinner("Comparing documents..."):
+            results_df = compare_documents(doc1_path, doc2_path, parameters)
+        
+        # Display the results
+        st.success("Comparison completed!")
+        st.dataframe(results_df)
+
+        # Download results as Excel
+        output_file = "comparison_results.xlsx"
+        results_df.to_excel(output_file, index=False)
+
+        with open(output_file, "rb") as f:
+            st.download_button(
+                label="Download Comparison Results",
+                data=f,
+                file_name="comparison_results.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+else:
+    st.info("Please upload both documents to start the comparison.")
