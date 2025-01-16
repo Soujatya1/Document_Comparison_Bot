@@ -1,5 +1,6 @@
 import streamlit as st
-import docx import Document
+import docx
+from docx import Document
 from transformers import AutoTokenizer, AutoModel
 import numpy as np
 import faiss
