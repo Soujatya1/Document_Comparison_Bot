@@ -6,6 +6,7 @@ import numpy as np
 import faiss
 import pandas as pd
 from langchain_groq import ChatGroq
+import torch
 
 # Set Groq API Key and Model
 groq_api_key = "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"
