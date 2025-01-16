@@ -4,3 +4,4 @@ faiss-cpu
 transformers
 langchain_groq
 python-docx
+torch
