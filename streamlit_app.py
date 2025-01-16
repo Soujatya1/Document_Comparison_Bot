@@ -62,8 +62,8 @@ def compare_documents(doc1_path, doc2_path, parameters):
     embeddings2 = generate_embeddings(chunks2)
 
     # Create FAISS vector databases
-    db1 = create_faiss_db(chunks1, embeddings1)
-    db2 = create_faiss_db(chunks2, embeddings2)
+    db1 = FAISS.from_documents(chunks1, embeddings1)
+    db2 = FAISS.from_documents(chunks2, embeddings2)
 
     # Initialize LLM (ChatGroq)
     llm = ChatGroq(groq_api_key="api_key", model_name="llama3-8b-8192")
