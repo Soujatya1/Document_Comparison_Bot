@@ -1,6 +1,6 @@
 streamlit
 pandas
-faiss
+faiss-gpu
 transformers
 langchain_groq
 docx
