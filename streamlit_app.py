@@ -1,151 +1,122 @@
 import streamlit as st
+from docx import Document
+from transformers import AutoTokenizer, AutoModel
+import numpy as np
+import faiss
 import pandas as pd
-import math
-from pathlib import Path
+from langchain_groq import ChatGroq
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
+# Set Groq API Key and Model
+groq_api_key = "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"
+llm = ChatGroq(groq_api_key=groq_api_key, model_name="llama3-8b-8192")
+
+# Helper Functions
+def read_docx(file_path):
+    doc = Document(file_path)
+    text = []
+    for paragraph in doc.paragraphs:
+        if paragraph.text.strip():
+            text.append(paragraph.text.strip())
+    return "\n".join(text)
+
+def chunk_text(text, max_length=512):
+    words = text.split()
+    for i in range(0, len(words), max_length):
+        yield " ".join(words[i:i + max_length])
+
+def generate_embeddings(chunks, model_name="sentence-transformers/all-MiniLM-L6-v2"):
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name)
+    embeddings = []
+    for chunk in chunks:
+        inputs = tokenizer(chunk, return_tensors="pt", truncation=True, padding=True)
+        outputs = model(**inputs)
+        embeddings.append(outputs.last_hidden_state.mean(dim=1).detach().numpy())
+    return np.vstack(embeddings)
+
+def store_embeddings_in_faiss(embeddings):
+    dim = embeddings.shape[1]
+    index = faiss.IndexFlatL2(dim)
+    index.add(embeddings)
+    return index
+
+def search_faiss(index, query, top_k=5, model_name="sentence-transformers/all-MiniLM-L6-v2"):
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name)
+    inputs = tokenizer(query, return_tensors="pt", truncation=True, padding=True)
+    query_embedding = model(**inputs).last_hidden_state.mean(dim=1).detach().numpy()
+    distances, indices = index.search(query_embedding, top_k)
+    return indices.flatten()
+
+def analyze_similarity(index1, index2, chunks1, chunks2, parameters):
+    results = []
+    for param in parameters:
+        similar_chunks1 = [chunks1[idx] for idx in search_faiss(index1, param)]
+        similar_chunks2 = [chunks2[idx] for idx in search_faiss(index2, param)]
+        comparison_prompt = f"Compare these texts based on {param}:\n\nText1: {similar_chunks1}\n\nText2: {similar_chunks2}"
+        response = llm(comparison_prompt)
+        results.append((param, response["generation"].strip()))
+    return results
+
+# Streamlit App
+st.title("Intelligent Document Comparer")
+st.sidebar.header("Upload Documents")
+
+# File Upload Section
+doc1_file = st.sidebar.file_uploader("Upload Document 1 (docx)", type=["docx"])
+doc2_file = st.sidebar.file_uploader("Upload Document 2 (docx)", type=["docx"])
+
+# Parameter Input
+parameters = st.sidebar.text_area(
+    "Enter Parameters for Comparison (one per line)", 
+    placeholder="E.g., Summary\nKey Points\nDifferences in Terminology"
+).splitlines()
+
+# Process Button
+if st.sidebar.button("Compare Documents"):
+    if doc1_file and doc2_file and parameters:
+        with st.spinner("Processing..."):
+            # Read and Process Documents
+            text1 = read_docx(doc1_file)
+            text2 = read_docx(doc2_file)
+
+            # Chunking
+            chunks1 = list(chunk_text(text1))
+            chunks2 = list(chunk_text(text2))
+
+            # Embedding Generation
+            embeddings1 = generate_embeddings(chunks1)
+            embeddings2 = generate_embeddings(chunks2)
+
+            # FAISS Index Creation
+            index1 = store_embeddings_in_faiss(embeddings1)
+            index2 = store_embeddings_in_faiss(embeddings2)
+
+            # Analyze Similarities
+            results = analyze_similarity(index1, index2, chunks1, chunks2, parameters)
+
+            # Display Results
+            st.success("Comparison Complete!")
+            st.write("### Comparison Results")
+            results_df = pd.DataFrame(results, columns=["Parameter", "Comparison"])
+            st.table(results_df)
+
+            # Option to Download Results
+            output_path = "comparison_results.xlsx"
+            results_df.to_excel(output_path, index=False)
+            with open(output_path, "rb") as file:
+                st.download_button(
+                    label="Download Results as Excel",
+                    data=file,
+                    file_name="comparison_results.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+    else:
+        st.error("Please upload both documents and specify parameters!")
+
+# About Section
+st.sidebar.write("---")
+st.sidebar.write("### About")
+st.sidebar.info(
+    "This app compares two documents based on specified parameters using embeddings, FAISS, and Groq LLM."
 )
-
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
-
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
-
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
-
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
-
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
-
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
