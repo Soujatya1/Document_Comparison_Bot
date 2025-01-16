@@ -1,2 +1,6 @@
 streamlit
 pandas
+faiss
+transformers
+langchain_groq
+docx
