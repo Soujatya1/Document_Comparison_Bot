@@ -5,3 +5,6 @@ transformers
 langchain_groq
 python-docx
 torch
+langchain_community
+langchain_core
+sentence_transformers
